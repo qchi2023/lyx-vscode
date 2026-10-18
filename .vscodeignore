@@ -1,0 +1,15 @@
+**
+!package.json
+!package-lock.json
+!README.md
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!CHANGELOG.md
+!SUPPORT.md
+!src/**
+!dist/**
+!media/viewer.css
+!media/viewer.js
+!docs/**
+!vendor/novnc/**
+!scripts/build.cjs

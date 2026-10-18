@@ -1,0 +1,15 @@
+node_modules/
+*.vsix
+artifacts/
+.local/
+evidence/
+tests/
+fixtures/
+__pycache__/
+*.pyc
+plan.md
+implementation_status.md
+WORKSPACE_*.md
+Todo/
+Meetings/
+AGENTS.md

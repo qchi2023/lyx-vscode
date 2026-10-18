@@ -1,0 +1,55 @@
+{
+  "name": "native-lyx",
+  "displayName": "Native LyX",
+  "description": "Edit local LyX documents in the real native application inside VS Code (Linux x64 preview)",
+  "version": "0.1.1",
+  "publisher": "HassanBukhari",
+  "license": "MPL-2.0",
+  "repository": {"type": "git", "url": "https://github.com/qchi2023/lyx-vscode.git"},
+  "bugs": {"url": "https://github.com/qchi2023/lyx-vscode/issues"},
+  "homepage": "https://github.com/qchi2023/lyx-vscode#readme",
+  "engines": {"vscode": "^1.100.0", "node": ">=18"},
+  "extensionKind": ["ui"],
+  "main": "./src/extension.cjs",
+  "categories": ["Other"],
+  "keywords": ["lyx", "latex", "equations", "native editor"],
+  "capabilities": {"untrustedWorkspaces": {"supported": false}, "virtualWorkspaces": false},
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "doctor": "node src/diagnostics.cjs",
+    "package": "vsce package --target linux-x64 --pre-release --no-dependencies"
+  },
+  "contributes": {
+    "customEditors": [{"viewType": "nativeLyx.editor", "displayName": "Native LyX", "selector": [{"filenamePattern": "*.lyx"}], "priority": "default"}],
+    "commands": [
+      {"command": "nativeLyxRelease.diagnostics", "title": "Native LyX: Check Dependencies"},
+      {"command": "nativeLyxRelease.sessions", "title": "Native LyX: Retained Sessions"},
+      {"command": "nativeLyxRelease.endSession", "title": "Native LyX: End Session"},
+      {"command": "nativeLyxRelease.recovery", "title": "Native LyX: Recover Session"},
+      {"command": "nativeLyxRelease.history", "title": "Native LyX: Open Saved File Snapshots"}
+    ],
+    "configuration": {
+      "title": "Native LyX",
+      "properties": {
+        "nativeLyxRelease.lyxPath": {"type": "string", "default": "", "description": "Installed LyX executable; empty discovers lyx on PATH."},
+        "nativeLyxRelease.nodePath": {"type": "string", "default": "", "description": "Standalone Node 18+ executable; empty discovers node on PATH."},
+        "nativeLyxRelease.vncPath": {"type": "string", "default": "", "description": "TigerVNC Xtigervnc or Xvnc executable."},
+        "nativeLyxRelease.windowManagerPath": {"type": "string", "default": "", "description": "Openbox executable."},
+        "nativeLyxRelease.websockifyPath": {"type": "string", "default": "", "description": "Websockify executable."},
+        "nativeLyxRelease.wmctrlPath": {"type": "string", "default": "", "description": "wmctrl executable."},
+        "nativeLyxRelease.xauthPath": {"type": "string", "default": "", "description": "xauth executable."},
+        "nativeLyxRelease.dbusPath": {"type": "string", "default": "", "description": "dbus-run-session executable."},
+        "nativeLyxRelease.dependencyRoot": {"type": "string", "default": "", "description": "Optional extracted Linux package prefix. Empty uses installed system programs/libraries."},
+        "nativeLyxRelease.storageRoot": {"type": "string", "default": "", "description": "Optional persistent session root. Empty uses this extension's globalStorageUri. Never use the extension installation directory."},
+        "nativeLyxRelease.width": {"type": "integer", "default": 1200, "minimum": 640, "maximum": 3840},
+        "nativeLyxRelease.height": {"type": "integer", "default": 800, "minimum": 480, "maximum": 2160},
+        "nativeLyxRelease.dpi": {"type": "integer", "default": 96, "minimum": 72, "maximum": 192},
+        "nativeLyxRelease.autosaveSeconds": {"type": "integer", "default": 30, "minimum": 1, "maximum": 300},
+        "nativeLyxRelease.maxSessions": {"type": "integer", "default": 4, "minimum": 1, "maximum": 12},
+        "nativeLyxRelease.startupTimeoutMs": {"type": "integer", "default": 60000, "minimum": 5000, "maximum": 180000},
+        "nativeLyxRelease.clipboardSync": {"type": "boolean", "default": true, "description": "Bridge plain-text Ctrl+C/Ctrl+V while this native editor is active."}
+      }
+    }
+  },
+  "devDependencies": {"esbuild": "0.28.2", "@vscode/vsce": "4.0.0"}
+}
