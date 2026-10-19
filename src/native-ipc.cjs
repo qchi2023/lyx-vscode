@@ -38,15 +38,16 @@ async function channel(prefix) {
   }
 }
 
-async function exchange(prefix, command, argument = '') {
+async function exchange(prefix, command, argument = '', options = {}) {
   if (/[\r\n]/.test(command + argument)) throw new Error('Native command arguments cannot contain line breaks.');
   const client = `native-lyx-${crypto.randomBytes(6).toString('hex')}`;
   const { read, write } = await channel(prefix);
     fs.writeSync(write, `LYXCMD:${client}:${command}:${argument}\n`);
     let text = '';
     const buffer = Buffer.alloc(CONFIG.readBytes);
-    const deadline = Date.now() + CONFIG.timeoutMs;
+    const deadline = Date.now() + (options.timeoutMs ?? CONFIG.timeoutMs);
     while (Date.now() < deadline) {
+      if (options.completed?.()) return;
       try {
         const count = fs.readSync(read, buffer, 0, buffer.length, null);
         text += buffer.toString('utf8', 0, count);
@@ -61,9 +62,9 @@ async function exchange(prefix, command, argument = '') {
     throw new Error('Native LyX did not answer its local command pipe; finish any open modal dialog and try again.');
 }
 
-function nativeCommand(prefix, command, argument = '') {
+function nativeCommand(prefix, command, argument = '', options = {}) {
   const previous = pending.get(prefix) || Promise.resolve();
-  const result = previous.catch(() => {}).then(() => exchange(prefix, command, argument));
+  const result = previous.catch(() => {}).then(() => exchange(prefix, command, argument, options));
   pending.set(prefix, result);
   result.finally(() => { if (pending.get(prefix) === result) pending.delete(prefix); }).catch(() => {});
   return result;

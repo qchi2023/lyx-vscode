@@ -14093,7 +14093,6 @@ var controlsDown = /* @__PURE__ */ new Set();
 var retryTimer;
 var retryCount = 0;
 var disposed = false;
-var identityBlocked = false;
 function showStatus(text, hidden = false) {
   status.textContent = text;
   status.hidden = hidden;
@@ -14107,7 +14106,7 @@ function retryConnection() {
   }, delay);
 }
 function requestPaste() {
-  if (!connected || pastePending || identityBlocked || desktop.dataset.clipboard === "false") return;
+  if (!connected || pastePending || desktop.dataset.clipboard === "false") return;
   pastePending = true;
   vscode.postMessage({ type: "paste" });
 }
@@ -14149,7 +14148,6 @@ function connect(port, token) {
   showStatus(retryCount ? "Reconnecting\u2026" : "Connecting");
   const current = new RFB(desktop, `ws://127.0.0.1:${port}/?token=${token}`);
   rfb = current;
-  current.viewOnly = identityBlocked;
   current.resizeSession = CONFIG.resizeSession;
   current.scaleViewport = CONFIG.scaleViewport;
   current.addEventListener("connect", () => {
@@ -14177,12 +14175,6 @@ function connect(port, token) {
 window.addEventListener("message", (event) => {
   const message = event.data;
   if (message.type === "connection") connect(message.port, message.token);
-  if (message.type === "identity") {
-    if (typeof message.matches === "boolean") identityBlocked = !message.matches;
-    if (rfb) rfb.viewOnly = identityBlocked;
-    if (identityBlocked) showStatus("This native window switched documents. Use Native LyX: Retained Sessions to restore the file bound to this tab.");
-    else if (connected) showStatus("Connected", true);
-  }
   if (message.type === "paste") {
     if (!pastePending) return;
     pastePending = false;

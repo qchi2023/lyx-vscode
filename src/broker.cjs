@@ -9,7 +9,8 @@ const { CONFIG: PROTOCOL, privateDirectory, pathsFor, atomicJson, canonicalFile,
   identity, isOwned, stopOwned, delay } = require('./common.cjs');
 const { nativeCommand, closeChannel } = require('./native-ipc.cjs');
 
-const CONFIG = { bodyLimit: 32768, maxSnapshotBytes: 64 * 1024 * 1024, displayFirst: 120, displayLast: 219 };
+const CONFIG = { bodyLimit: 32768, maxSnapshotBytes: 64 * 1024 * 1024, displayFirst: 120, displayLast: 219,
+  quitTimeoutMs: 30 * 60 * 1000 };
 
 async function serve(options) {
   const locations = pathsFor(options.storageRoot);
@@ -29,6 +30,7 @@ async function serve(options) {
   const sessions = new Map();
   const pending = new Map();
   const watchers = new Map();
+  const quitting = new Map();
   let server;
   let startupQueue = Promise.resolve();
   try {
@@ -191,6 +193,39 @@ async function serve(options) {
     if (!preserveProfile) throw new Error('Profiles are never automatically deleted.');
   }
 
+  function quitSession(session) {
+    const previous = quitting.get(session.id);
+    if (previous?.status === 'waiting' || previous?.status === 'closing') return previous;
+    const result = { status: 'waiting' };
+    quitting.set(session.id, result);
+    (async () => {
+      try {
+        if (nativeAlive(session)) {
+          // Native LyX, including every buffer in this private process, owns
+          // Save/Don't Save/Cancel. Never send a termination signal to it here.
+          await nativeCommand(session.pipe, 'lyx-quit', '', {
+            timeoutMs: CONFIG.quitTimeoutMs, completed: () => !nativeAlive(session)
+          });
+          const deadline = Date.now() + 1500;
+          while (nativeAlive(session) && Date.now() < deadline) await delay(60);
+        }
+        if (nativeAlive(session)) { result.status = 'cancelled'; return; }
+        reconcileExit(session);
+        if (session.state !== 'closed in LyX' && session.state !== 'ended explicitly') {
+          throw new Error('LyX exited unexpectedly while closing; its profile and autosaves were preserved.');
+        }
+        result.status = 'closing';
+        // The native application has already exited by its own decision.
+        await stopSession(session, true);
+        result.status = 'closed';
+      } catch (error) {
+        result.status = 'error';
+        result.error = error.message;
+      }
+    })();
+    return result;
+  }
+
   async function startSession(session) {
     session.runtime = privateDirectory(path.join(locations.runtime, session.id));
     session.directory = privateDirectory(path.join(locations.storage, 'sessions', session.id));
@@ -274,9 +309,12 @@ async function serve(options) {
     }
   }
 
-  async function open(file, root) {
+  async function open(file, root, attach = false) {
     const filename = canonicalFile(file, root);
     let session = sessions.get(filename);
+    if (quitting.get(session?.id)?.status === 'closing') {
+      throw new Error('The previous native session is finishing its normal shutdown. Try opening it again in a moment.');
+    }
     if (session) reconcileExit(session);
     for (const other of sessions.values()) {
       if (other.filename !== filename && other.currentFile === filename && nativeAlive(other)) {
@@ -285,8 +323,11 @@ async function serve(options) {
     }
     if (session && nativeAlive(session)) {
       await bridge(session);
-      const checked = await checkIdentity(session, true);
+      const checked = quitting.get(session.id)?.status === 'waiting' ? null : await checkIdentity(session, !attach, attach);
       return { ...publicSession(session, true), identity: checked };
+    }
+    if (attach) {
+      throw new Error('This native session has stopped. Reopen the file with Native LyX to start it again.');
     }
     if (session && session.state !== 'closed in LyX' && session.state !== 'ended explicitly') {
       session.recoveryRequired = true;
@@ -301,6 +342,7 @@ async function serve(options) {
     session ||= { id: crypto.randomBytes(8).toString('hex'), filename, root: fs.realpathSync(root),
       created: new Date().toISOString(), processes: [], snapshots: [] };
     sessions.set(filename, session);
+    quitting.delete(session.id);
     try { await startSession(session); }
     catch (error) {
       session.error = error.message;
@@ -316,9 +358,14 @@ async function serve(options) {
   }
 
   async function handle(route, body) {
-    if (route === '/health') return { protocol: PROTOCOL.protocol, ...identity(process.pid), engine: __dirname };
+    if (route === '/health') return { protocol: PROTOCOL.protocol, ...identity(process.pid), engine: __dirname,
+      capabilities: ['graceful-quit'], pending: pending.size + [...quitting.values()].filter(item => ['waiting', 'closing'].includes(item.status)).length };
     if (route === '/sessions') return [...sessions.values()].map(session => { reconcileExit(session); return publicSession(session); });
     const session = [...sessions.values()].find(item => item.id === body.id);
+    if (route === '/quit' || route === '/quit-state') {
+      if (!session) throw new Error('Unknown retained session.');
+      return route === '/quit' ? quitSession(session) : quitting.get(session.id) || { status: 'cancelled' };
+    }
     if (route === '/end') {
       if (!session) throw new Error('Unknown retained session.');
       const operation = startupQueue.then(() => stopSession(session, body.discardConfirmed));
@@ -328,12 +375,18 @@ async function serve(options) {
     }
     if (route === '/identity') {
       if (!session || !nativeAlive(session)) throw new Error('Native session is not running; use explicit session recovery.');
+      if (quitting.get(session.id)?.status === 'waiting') return { matches: null, expected: session.filename };
       return checkIdentity(session, Boolean(body.restore), Boolean(body.passive));
     }
     if (route === '/recover') {
       if (!session || body.confirmed !== true) throw new Error('Choose a retained session and explicitly confirm reopening its preserved profile.');
       if (nativeAlive(session)) throw new Error('This native session is still running. Reopen its editor instead of recovering it.');
       const operation = startupQueue.then(async () => {
+        // Another request may already have recovered it while this one queued.
+        if (nativeAlive(session)) { await bridge(session); return session; }
+        if ([...sessions.values()].filter(nativeAlive).length >= options.maxSessions) {
+          throw new Error('Native session limit reached. Close a native session before reopening another document.');
+        }
         await stopSession(session, true);
         return startSession(session);
       });
@@ -353,7 +406,7 @@ async function serve(options) {
     if (!['/open', '/attach'].includes(route)) throw new Error('Unknown native runtime operation.');
     const filename = canonicalFile(body.filename, body.root);
     if (!pending.has(filename)) {
-      const operation = startupQueue.then(() => open(filename, body.root));
+      const operation = startupQueue.then(() => open(filename, body.root, route === '/attach'));
       startupQueue = operation.catch(() => {});
       pending.set(filename, operation.finally(() => pending.delete(filename)));
     }

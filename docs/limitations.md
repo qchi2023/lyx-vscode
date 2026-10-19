@@ -13,6 +13,11 @@ experience cannot be identical to an ordinary desktop window.
 - Closing a VS Code tab or reloading Code disconnects only the viewer. Native
   sessions remain live, including unsaved edits, and consume memory until you
   close native LyX or explicitly end them. Reopen the same file to reattach.
+- Explicitly switching to **Text Editor** instead requests native Quit. An
+  unsaved-work dialog is shown in a temporary native tab; Cancel restores Native
+  LyX. Save/Don't Save completes the switch and closes its owned desktop/bridge.
+  Resolve every native buffer opened in that session; a native comparison or
+  Save As can leave additional buffers open. A timeout/error preserves them.
 - Native dialogs, menus and toolbars remain within the private desktop. Files
   chosen in a dialog are local-machine files. Large dialogs may require a larger
   editor group; browser zoom and native LyX document zoom are different controls.
@@ -23,14 +28,13 @@ experience cannot be identical to an ordinary desktop window.
   native rich clipboard is retained when host text has not changed. Clipboard
   sync can be disabled. Do not expect browser webviews to expose native widgets
   to screen readers; canvas accessibility is a known limitation.
-- Use one workspace file per VS Code tab. Native File Open and Save As can change
-  the displayed buffer. A periodic window-title check triggers native IPC
-  verification when the title changes; tab activation also verifies the buffer.
-  A reported different filename pauses input and offers restoration. The check
-  is not instantaneous, and custom native title formats may hide a switch; dialogs
-  may temporarily prevent IPC replies. Save As does not rename/rebind the VS Code
-  tab. Finish the native dialog and reopen the intended workspace file. Multiple
-  native buffers in one private process are outside the supported workflow.
+- Native Compare, File Open and Save As can change the displayed buffer. Input
+  stays enabled; tab activation and reconnection preserve that native selection.
+  A periodic title/IPC check updates the tab title when LyX answers. Custom title
+  formats and modal dialogs may delay detection. Save As does not rebind the
+  tab's workspace resource or its extension snapshots. Explorer reopening of the
+  original resource selects its corresponding buffer. Closing its session with
+  Text Editor or native Quit applies to every buffer in that private process.
 - External edits use LyX's own changed-file checks. The broker also archives
   observed disk revisions, but a filesystem watcher cannot guarantee capturing
   every rapid write. No automatic text merge or remote collaboration is provided.

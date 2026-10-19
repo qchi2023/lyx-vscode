@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { CONFIG: PROTOCOL, pathsFor, privateDirectory, atomicJson, request, delay } = require('./common.cjs');
+const { CONFIG: PROTOCOL, pathsFor, privateDirectory, atomicJson, request, delay, isOwned, stopOwned } = require('./common.cjs');
 const { inspect } = require('./diagnostics.cjs');
 
 const CONFIG = { engineFiles: ['broker.cjs', 'common.cjs', 'native-ipc.cjs', 'native-launch.cjs'], startTimeoutMs: 15000 };
@@ -30,16 +30,35 @@ async function ensureRuntime({ sourceRoot, storageRoot, settings = {} }) {
   const locations = pathsFor(storageRoot);
   privateDirectory(locations.storage);
   privateDirectory(locations.runtime);
+  const engine = stageEngine(sourceRoot, storageRoot);
   try {
     const health = await request(locations.socket, '/health', {}, 1500);
     if (health.protocol !== PROTOCOL.protocol) throw new Error('An incompatible runtime is retaining sessions. Save/resolve its native sessions before upgrading its protocol.');
-    return locations;
+    if (health.engine === engine) return locations;
+    // A compatible broker can finish its current native decision/startup. The
+    // client checks for an engine update again after the quit is resolved.
+    if (health.pending && health.capabilities?.includes('graceful-quit')) return locations;
+    const saved = JSON.parse(fs.readFileSync(locations.lock, 'utf8'));
+    const relative = path.relative(locations.engines, health.engine || '');
+    if (!isOwned(health) || saved.pid !== health.pid || saved.start !== health.start || saved.boot !== health.boot ||
+        relative.startsWith('..') || path.isAbsolute(relative) || !relative) {
+      throw new Error('Cannot verify ownership of the previous broker. Its native sessions were left intact.');
+    }
+    const sessions = await request(locations.socket, '/sessions');
+    if (health.pending || sessions.some(session => session.state === 'starting')) {
+      throw new Error('Wait for Native LyX startup to finish before updating its connection broker.');
+    }
+    // Upgrade the connection broker only. Every native application/desktop has
+    // a separate owned process group; the new broker adopts their registry.
+    stopOwned(health, 'SIGTERM');
+    const deadline = Date.now() + 5000;
+    while (isOwned(health) && Date.now() < deadline) await delay(50);
+    if (isOwned(health)) throw new Error('The previous broker has not exited; native sessions were preserved.');
   } catch (error) {
     if (!['ENOENT', 'ECONNREFUSED'].includes(error.code)) throw error;
   }
   const diagnostic = inspect(settings);
   if (!diagnostic.ok) throw new Error(`${diagnostic.errors.join('\n')}\nSee the extension's installation guide or Native LyX: Check Dependencies.`);
-  const engine = stageEngine(sourceRoot, storageRoot);
   atomicJson(locations.config, { ...diagnostic.resolved, storageRoot: locations.storage });
   const log = fs.openSync(path.join(locations.storage, 'broker.log'), 'a', 0o600);
   const env = { ...process.env };

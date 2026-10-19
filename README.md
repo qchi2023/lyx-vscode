@@ -46,9 +46,19 @@ lists them. Save/close work in LyX before **Native LyX: End Session**, whose
 confirmation explicitly permits discarding remaining buffers. Retained sessions
 consume memory until resolved, even after disabling/uninstalling this extension.
 
-Native crashes require **Native LyX: Recover Session** and a deliberate choice
-in LyX's autosave recovery dialog. Recovery of the last successful autosave was
-demonstrated; newer edits and host-reboot recovery are not guaranteed. Disk
+**Reopen Editor With… → Text Editor** requests normal native LyX Quit for that
+file's private session. If LyX asks about unsaved work, its real dialog appears
+in a temporary native tab: choose Save, Don't Save or Cancel there. Save/Don't
+Save completes the switch and stops that session's private desktop/bridge;
+Cancel returns to Native LyX with the buffer intact. Choosing **Native LyX**
+again starts the installed application for the same file. Ordinary tab closure
+and Code reload still preserve sessions. Other managed files and ordinary
+desktop LyX instances are not closed.
+
+After a PC shutdown or native LyX exit, click the file again to restart LyX with
+its existing profile. No separate extension recovery command is required. LyX
+may display its usual autosave/emergency recovery dialog. Edits newer than the
+last successful native autosave are not guaranteed. Disk
 revisions observed by the watcher are available through **Native LyX: Open Saved
 File Snapshots**. Keep ordinary backups. Native external-change prompts require
 an explicit reload/overwrite decision; no automatic merge is provided.
@@ -57,9 +67,11 @@ an explicit reload/overwrite decision; no automatic merge is provided.
 
 - Plain-text clipboard bridging only. Rich objects, images, drag/drop and
   primary-selection interoperability across separate sessions are unsupported.
-- Use one workspace document per VS Code tab. Native File Open/Save As can switch
-  the buffer; a title/IPC identity guard pauses input and offers restoration.
-  Save As does not rebind/rename the VS Code tab. The check is not instantaneous.
+- Native comparison, File Open and Save As can switch buffers without blocking
+  native input. The tab title follows the current filename when LyX answers the
+  periodic check; its workspace resource remains the originally selected file.
+  Reopening that workspace resource selects its original native buffer. Only
+  the original resource has extension snapshots; Save As does not rebind it.
 - Native profiles are separate from ordinary desktop LyX preferences. Dialogs
   must fit within the editor group. Canvas viewing has limited accessibility.
 - Snapshots cannot capture every rapid external write or unsaved native edit.

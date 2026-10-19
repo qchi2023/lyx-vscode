@@ -7,9 +7,10 @@ bridge can be recreated without restarting native LyX. An unexpectedly exited
 broker adopts its recorded live processes using PID, process start time and
 machine boot identity, so PID reuse is not treated as ownership.
 
-If native LyX itself has exited unexpectedly, automatic reopening is refused.
-Use **Native LyX: Recover Session** and explicitly confirm reopening the
-preserved profile. LyX may offer its autosave recovery dialog. Inspect both the
+If native LyX itself has exited or the PC has shut down, click the document in
+Explorer again. The extension restarts LyX using the same preserved profile,
+without an extension recovery prompt. LyX may offer its usual autosave or
+emergency recovery dialog, just as on the desktop. Inspect both the
 disk document and recovered version; save a separate copy if uncertain. Recovery
 does not silently replace the original file. Native autosave data may reside
 beside the document or in the retained profile/temp directory. Never delete
@@ -29,12 +30,20 @@ revision. Preserve separate copies when keeping both sets of edits. Automatic
 merging is not implemented. A watcher may miss very short-lived disk versions;
 use ordinary file backups in addition to this integration.
 
-To stop a session, save/close its native documents first, then choose **Native
+Choosing **Reopen Editor With… → Text Editor** requests normal native Quit.
+If native LyX needs a save decision, a temporary tab displays its real dialog.
+Save/Don't Save finishes the switch and stops only that private session; Cancel
+returns to Native LyX. No forced kill is used to dismiss an unanswered dialog.
+Choosing Native LyX again starts it with the same profile and selected file.
+When upgrading from 0.1.1, only the old integration broker is restarted to load
+the graceful-quit support; recorded native applications/desktops are adopted.
+
+For explicit forced session termination, save/close its native documents first, then choose **Native
 LyX: End Session**. The modal confirmation explicitly permits discarding any
 remaining buffers. Only recorded owned processes receive termination signals;
 profiles, snapshots and logs are retained. If a process does not exit, ownership
 records remain and a new session is refused rather than losing track of it.
 
-After a reboot, native processes cannot survive. The next opening requires the
-explicit recovery path. Edits after the last native autosave may be lost. Test
+After a reboot, native processes cannot survive. The next opening automatically
+starts LyX again with the retained profile. Edits after the last native autosave may be lost. Test
 recovery with a disposable file on your own LyX version before relying on it.

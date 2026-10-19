@@ -1,6 +1,18 @@
 # Changelog
 
-## 0.1.1 — Unreleased Linux preview
+## 0.1.2 — Unreleased Linux preview
+
+- Opening a document after shutdown or a native LyX exit automatically restarts
+  its preserved profile. Native autosave/emergency dialogs remain in LyX.
+- Reuse a running native session and coalesce concurrent openings of the same file.
+- Text Editor requests normal LyX Quit with native Save/Don't Save/Cancel;
+  Native LyX starts it again. Stop the private desktop only after normal exit.
+- Keep native comparison/File Open/Save As interactive and reflect the current
+  buffer in the tab title; reconnect no longer switches away from it.
+- Upgrade the owned 0.1.1 broker while retaining its native applications.
+- Automatic reconnect never restarts an explicitly stopped native session.
+
+## 0.1.1 — Linux preview
 
 - Real installed LyX inside local VS Code editor tabs.
 - Installed executable discovery, explicit overrides and startup diagnostics.

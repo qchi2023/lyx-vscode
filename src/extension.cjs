@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { ensureRuntime } = require('./runtime.cjs');
 const { inspect } = require('./diagnostics.cjs');
-const { request } = require('./common.cjs');
+const { request, delay } = require('./common.cjs');
 
 const CONFIG = { viewType: 'nativeLyx.editor', settingGroup: 'nativeLyxRelease', identityIntervalMs: 2500 };
 function escape(value) {
@@ -14,6 +14,11 @@ function escape(value) {
 
 function activate(context) {
   let starting;
+  const opening = new Map();
+  const detached = new Map();
+  const switching = new Set();
+  let active = true;
+  context.subscriptions.push({ dispose() { active = false; } });
   const output = vscode.window.createOutputChannel('Native LyX');
   context.subscriptions.push(output);
   const settings = () => {
@@ -44,13 +49,31 @@ function activate(context) {
   };
   const showError = error => vscode.window.showErrorMessage(`Native LyX: ${error.message}`);
 
-  context.subscriptions.push(vscode.window.registerCustomEditorProvider(CONFIG.viewType, {
+  const provider = {
     async openCustomDocument(uri) {
       const folder = trustedFile(uri);
-      const session = await call('/open', { filename: uri.fsPath, root: folder.uri.fsPath });
+      const filename = fs.realpathSync(uri.fsPath);
+      if (!opening.has(filename)) {
+        const operation = (async () => {
+          const body = { filename, root: folder.uri.fsPath };
+          try { return await call('/open', body); }
+          catch (error) {
+            if (error.code !== 'RECOVERY_REQUIRED') throw error;
+            const retained = (await call('/sessions')).find(session => session.filename === filename);
+            if (!retained) throw error;
+            // Opening a stopped document restarts its existing profile. Native
+            // LyX owns any autosave/emergency prompt; no buffer is discarded here.
+            if (retained.live) return call('/open', body);
+            return call('/recover', { id: retained.id, confirmed: true });
+          }
+        })();
+        opening.set(filename, operation.finally(() => opening.delete(filename)));
+      }
+      const session = await opening.get(filename);
       return { uri, folder, session, dispose() {} };
     },
     async resolveCustomEditor(document, panel) {
+      if (!document.quitting) detached.delete(document.uri.toString());
       panel.webview.options = { enableScripts: true, localResourceRoots: [
         vscode.Uri.joinPath(context.extensionUri, 'dist'), vscode.Uri.joinPath(context.extensionUri, 'media')
       ] };
@@ -65,24 +88,14 @@ function activate(context) {
         <script type="module" nonce="${nonce}" src="${script}"></script></body></html>`;
       let disposed = false;
       let checking = false;
-      let mismatchReported = false;
       const check = async restore => {
-        if (disposed || checking || !panel.active) return;
+        if (disposed || checking || !panel.active || document.quitting) return;
         checking = true;
         try {
           const result = await call('/identity', { id: document.session.id, restore, passive: !restore });
-          if (!disposed) panel.webview.postMessage({ type: 'identity', ...result });
-          if (result.matches === false && !mismatchReported) {
-            mismatchReported = true;
-            vscode.window.showWarningMessage(
-              `LyX switched to ${result.actual || 'another document'}. This tab remains bound to ${path.basename(document.uri.fsPath)}.`, 'Restore this tab’s document')
-              .then(async decision => {
-                if (!decision || disposed) return;
-                const restored = await call('/identity', { id: document.session.id, restore: true });
-                if (!disposed) panel.webview.postMessage({ type: 'identity', ...restored });
-              }).then(undefined, error => output.appendLine(error.message));
-          }
-          if (result.matches === true) mismatchReported = false;
+          // Native Compare/File Open/Save As may legitimately select another
+          // buffer. Reflect it in the title without disabling native input.
+          if (!disposed && result.actual) panel.title = path.basename(result.actual);
         } catch (error) { output.appendLine(error.message); }
         finally { checking = false; }
       };
@@ -95,6 +108,7 @@ function activate(context) {
           if (message.type === 'copy' && clipboardSync && panel.active && vscode.window.state.focused &&
               typeof message.text === 'string' && message.text.length <= 1048576) await vscode.env.clipboard.writeText(message.text);
           if (message.type === 'reconnect') {
+            if (document.quitting) return;
             const session = await call('/attach', { filename: document.uri.fsPath, root: document.folder.uri.fsPath });
             document.session = session;
             if (!disposed) panel.webview.postMessage({ type: 'connection', port: session.port, token: session.token });
@@ -104,12 +118,80 @@ function activate(context) {
           if (!disposed) panel.webview.postMessage({ type: 'error', text: error.message });
         }
       });
-      const visibility = panel.onDidChangeViewState(() => { if (panel.active) check(true); });
+      const visibility = panel.onDidChangeViewState(() => { if (panel.active) check(false); });
       const interval = setInterval(() => check(false), CONFIG.identityIntervalMs);
-      panel.onDidDispose(() => { disposed = true; clearInterval(interval); messages.dispose(); visibility.dispose(); });
+      panel.onDidDispose(() => {
+        disposed = true; clearInterval(interval); messages.dispose(); visibility.dispose();
+        if (!document.quitting && active) {
+          detached.set(document.uri.toString(), document);
+          setTimeout(checkTextSwitches, 100);
+        }
+      });
       check(false);
     }
-  }, { supportsMultipleEditorsPerDocument: false }));
+  };
+  context.subscriptions.push(vscode.window.registerCustomEditorProvider(CONFIG.viewType, provider,
+    { supportsMultipleEditorsPerDocument: false }));
+
+  async function switchToText(document, editor) {
+    const key = document.uri.toString();
+    switching.add(key);
+    let decisionPanel;
+    let finished = false;
+    try {
+      let result = await call('/quit', { id: document.session.id });
+      await delay(500);
+      while (active && ['waiting', 'closing'].includes(result.status)) {
+        result = await call('/quit-state', { id: document.session.id });
+        if (result.status === 'waiting' && !decisionPanel) {
+          // A disposed custom editor cannot veto Reopen With. Show the actual
+          // native Quit dialog in a temporary viewer until the user decides.
+          decisionPanel = vscode.window.createWebviewPanel('nativeLyx.quit',
+            `${path.basename(document.uri.fsPath)} — Save changes in LyX`, editor.viewColumn || vscode.ViewColumn.Active,
+            { enableScripts: true, retainContextWhenHidden: true });
+          decisionPanel.onDidDispose(() => { decisionPanel = undefined; });
+          await provider.resolveCustomEditor({ ...document, quitting: true }, decisionPanel);
+        }
+        await delay(200);
+      }
+      if (!active) return;
+      starting = null;
+      finished = true;
+      if (result.status === 'closed') {
+        const restoreText = Boolean(decisionPanel);
+        decisionPanel?.dispose();
+        // Reuse the existing TextDocument, including any source edits; never
+        // replace its contents with an extension-generated copy.
+        if (restoreText) await vscode.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn, preview: false });
+      } else {
+        decisionPanel?.dispose();
+        await vscode.commands.executeCommand('vscode.openWith', document.uri, CONFIG.viewType);
+        if (result.status === 'error') throw new Error(result.error);
+      }
+    } catch (error) {
+      if (active) {
+        finished = true;
+        decisionPanel?.dispose();
+        await vscode.commands.executeCommand('vscode.openWith', document.uri, CONFIG.viewType);
+        await showError(error);
+      }
+    } finally {
+      if (finished) detached.delete(key);
+      switching.delete(key);
+    }
+  }
+  function checkTextSwitches() {
+    if (!active) return;
+    for (const editor of vscode.window.visibleTextEditors) {
+      const key = editor.document.uri.toString();
+      const document = detached.get(key);
+      if (!document || switching.has(key)) continue;
+      const nativeTab = vscode.window.tabGroups.all.some(group => group.tabs.some(tab =>
+        tab.input instanceof vscode.TabInputCustom && tab.input.viewType === CONFIG.viewType && tab.input.uri.toString() === key));
+      if (!nativeTab) switchToText(document, editor).catch(showError);
+    }
+  }
+  context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(checkTextSwitches));
 
   const choose = async () => {
     const sessions = await call('/sessions');
