@@ -1,8 +1,16 @@
 # Session lifetime, recovery and conflicts
 
-Start with **Native LyX: Retained Sessions**. Never end a session merely because
-its viewer disconnected. Reopening the same canonical workspace file attaches
-to the retained native process. A lost WebSocket retries automatically; a dead
+Closing a Native LyX tab requests normal native Quit. A saved document closes;
+unsaved work uses native Save/Don't Save/Cancel in a temporary tab. Cancel restores
+the editor. Close All serializes these decisions. After successful native exit,
+the private desktop/bridge, file watcher and command pipes are stopped, and an
+idle broker exits after a short grace. No forced kill dismisses a save dialog.
+Reopening a completed close starts LyX for the original file and retained profile.
+
+For Code reload or unexpected connection loss, use **Native LyX: Retained Sessions**.
+Never end a session merely because its viewer disconnected. Reopening the same
+canonical workspace file attaches to its live process. A lost WebSocket retries
+automatically; a dead
 bridge can be recreated without restarting native LyX. An unexpectedly exited
 broker adopts its recorded live processes using PID, process start time and
 machine boot identity, so PID reuse is not treated as ownership.
@@ -35,6 +43,9 @@ If native LyX needs a save decision, a temporary tab displays its real dialog.
 Save/Don't Save finishes the switch and stops only that private session; Cancel
 returns to Native LyX. No forced kill is used to dismiss an unanswered dialog.
 Choosing Native LyX again starts it with the same profile and selected file.
+If Code reloads while a native save decision is pending, reopen the original file
+to see native LyX again and finish its dialog. A normal app/window shutdown is
+not the explicit tab-close interaction; save/resolve buffers before exiting Code.
 When upgrading from 0.1.1, only the old integration broker is restarted to load
 the graceful-quit support; recorded native applications/desktops are adopted.
 

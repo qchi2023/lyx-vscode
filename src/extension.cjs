@@ -7,7 +7,7 @@ const { ensureRuntime } = require('./runtime.cjs');
 const { inspect } = require('./diagnostics.cjs');
 const { request, delay } = require('./common.cjs');
 
-const CONFIG = { viewType: 'nativeLyx.editor', settingGroup: 'nativeLyxRelease', identityIntervalMs: 2500 };
+const CONFIG = { viewType: 'nativeLyx.editor', settingGroup: 'nativeLyxRelease', identityIntervalMs: 2500, closeDelayMs: 300 };
 function escape(value) {
   return String(value).replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 }
@@ -17,6 +17,9 @@ function activate(context) {
   const opening = new Map();
   const detached = new Map();
   const switching = new Set();
+  const closedTabs = new Set();
+  const quittingFiles = new Set();
+  let closeQueue = Promise.resolve();
   let active = true;
   context.subscriptions.push({ dispose() { active = false; } });
   const output = vscode.window.createOutputChannel('Native LyX');
@@ -52,6 +55,7 @@ function activate(context) {
   const provider = {
     async openCustomDocument(uri) {
       const folder = trustedFile(uri);
+      if (quittingFiles.has(uri.toString())) throw new Error('Finish the native save decision before reopening this document.');
       const filename = fs.realpathSync(uri.fsPath);
       if (!opening.has(filename)) {
         const operation = (async () => {
@@ -70,10 +74,19 @@ function activate(context) {
         opening.set(filename, operation.finally(() => opening.delete(filename)));
       }
       const session = await opening.get(filename);
-      return { uri, folder, session, dispose() {} };
+      const document = { uri, folder, session, dispose() {
+        if (!active) return;
+        detached.set(uri.toString(), document);
+        setTimeout(checkDetachedEditors, CONFIG.closeDelayMs);
+      } };
+      return document;
     },
     async resolveCustomEditor(document, panel) {
-      if (!document.quitting) detached.delete(document.uri.toString());
+      if (!document.quitting) {
+        detached.delete(document.uri.toString());
+        closedTabs.delete(document.uri.toString());
+        document.viewColumn = panel.viewColumn;
+      }
       panel.webview.options = { enableScripts: true, localResourceRoots: [
         vscode.Uri.joinPath(context.extensionUri, 'dist'), vscode.Uri.joinPath(context.extensionUri, 'media')
       ] };
@@ -108,7 +121,6 @@ function activate(context) {
           if (message.type === 'copy' && clipboardSync && panel.active && vscode.window.state.focused &&
               typeof message.text === 'string' && message.text.length <= 1048576) await vscode.env.clipboard.writeText(message.text);
           if (message.type === 'reconnect') {
-            if (document.quitting) return;
             const session = await call('/attach', { filename: document.uri.fsPath, root: document.folder.uri.fsPath });
             document.session = session;
             if (!disposed) panel.webview.postMessage({ type: 'connection', port: session.port, token: session.token });
@@ -118,13 +130,16 @@ function activate(context) {
           if (!disposed) panel.webview.postMessage({ type: 'error', text: error.message });
         }
       });
-      const visibility = panel.onDidChangeViewState(() => { if (panel.active) check(false); });
+      const visibility = panel.onDidChangeViewState(() => {
+        if (!document.quitting) document.viewColumn = panel.viewColumn;
+        if (panel.active) check(false);
+      });
       const interval = setInterval(() => check(false), CONFIG.identityIntervalMs);
       panel.onDidDispose(() => {
         disposed = true; clearInterval(interval); messages.dispose(); visibility.dispose();
         if (!document.quitting && active) {
           detached.set(document.uri.toString(), document);
-          setTimeout(checkTextSwitches, 100);
+          setTimeout(checkDetachedEditors, CONFIG.closeDelayMs);
         }
       });
       check(false);
@@ -133,9 +148,9 @@ function activate(context) {
   context.subscriptions.push(vscode.window.registerCustomEditorProvider(CONFIG.viewType, provider,
     { supportsMultipleEditorsPerDocument: false }));
 
-  async function switchToText(document, editor) {
+  async function closeDocument(document, editor) {
     const key = document.uri.toString();
-    switching.add(key);
+    quittingFiles.add(key);
     let decisionPanel;
     let finished = false;
     try {
@@ -147,7 +162,7 @@ function activate(context) {
           // A disposed custom editor cannot veto Reopen With. Show the actual
           // native Quit dialog in a temporary viewer until the user decides.
           decisionPanel = vscode.window.createWebviewPanel('nativeLyx.quit',
-            `${path.basename(document.uri.fsPath)} — Save changes in LyX`, editor.viewColumn || vscode.ViewColumn.Active,
+            `${path.basename(document.uri.fsPath)} — Save changes in LyX`, editor?.viewColumn || document.viewColumn || vscode.ViewColumn.Active,
             { enableScripts: true, retainContextWhenHidden: true });
           decisionPanel.onDidDispose(() => { decisionPanel = undefined; });
           await provider.resolveCustomEditor({ ...document, quitting: true }, decisionPanel);
@@ -162,9 +177,10 @@ function activate(context) {
         decisionPanel?.dispose();
         // Reuse the existing TextDocument, including any source edits; never
         // replace its contents with an extension-generated copy.
-        if (restoreText) await vscode.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn, preview: false });
+        if (restoreText && editor) await vscode.window.showTextDocument(editor.document, { viewColumn: editor.viewColumn, preview: false });
       } else {
         decisionPanel?.dispose();
+        quittingFiles.delete(key);
         await vscode.commands.executeCommand('vscode.openWith', document.uri, CONFIG.viewType);
         if (result.status === 'error') throw new Error(result.error);
       }
@@ -172,26 +188,40 @@ function activate(context) {
       if (active) {
         finished = true;
         decisionPanel?.dispose();
+        quittingFiles.delete(key);
         await vscode.commands.executeCommand('vscode.openWith', document.uri, CONFIG.viewType);
         await showError(error);
       }
     } finally {
       if (finished) detached.delete(key);
-      switching.delete(key);
+      closedTabs.delete(key);
+      quittingFiles.delete(key);
     }
   }
-  function checkTextSwitches() {
+  const hasNativeTab = key => vscode.window.tabGroups.all.some(group => group.tabs.some(tab =>
+    tab.input instanceof vscode.TabInputCustom && tab.input.viewType === CONFIG.viewType && tab.input.uri.toString() === key));
+  function checkDetachedEditors() {
     if (!active) return;
-    for (const editor of vscode.window.visibleTextEditors) {
-      const key = editor.document.uri.toString();
-      const document = detached.get(key);
-      if (!document || switching.has(key)) continue;
-      const nativeTab = vscode.window.tabGroups.all.some(group => group.tabs.some(tab =>
-        tab.input instanceof vscode.TabInputCustom && tab.input.viewType === CONFIG.viewType && tab.input.uri.toString() === key));
-      if (!nativeTab) switchToText(document, editor).catch(showError);
+    for (const [key, document] of detached) {
+      if (switching.has(key) || hasNativeTab(key)) continue;
+      const editor = vscode.window.visibleTextEditors.find(item => item.document.uri.toString() === key);
+      if (!editor && !closedTabs.has(key)) continue;
+      switching.add(key);
+      // Serialize native decisions for Close All. A moved/reopened tab cancels
+      // a queued close before its native process receives Quit.
+      closeQueue = closeQueue.catch(() => {}).then(async () => {
+        if (!active || hasNativeTab(key)) return;
+        await closeDocument(document, editor);
+      }).catch(showError).finally(() => switching.delete(key));
     }
   }
-  context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(checkTextSwitches));
+  context.subscriptions.push(vscode.window.onDidChangeVisibleTextEditors(checkDetachedEditors));
+  context.subscriptions.push(vscode.window.tabGroups.onDidChangeTabs(event => {
+    for (const tab of event.closed) {
+      if (tab.input instanceof vscode.TabInputCustom && tab.input.viewType === CONFIG.viewType) closedTabs.add(tab.input.uri.toString());
+    }
+    setTimeout(checkDetachedEditors, CONFIG.closeDelayMs);
+  }));
 
   const choose = async () => {
     const sessions = await call('/sessions');

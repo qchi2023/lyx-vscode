@@ -39,21 +39,30 @@ save, undo, redo and math. Personal VS Code keybindings may take precedence;
 native menus are available. VS Code Save All, autosave, dirty dots and close
 prompts do **not** represent native buffers.
 
-Each canonical file has a retained native process/private desktop. Tab closure,
-Code reload or connection loss disconnects the viewer and preserves live native
-buffers. Reopen the same file to reconnect. **Native LyX: Retained Sessions**
-lists them. Save/close work in LyX before **Native LyX: End Session**, whose
-confirmation explicitly permits discarding remaining buffers. Retained sessions
-consume memory until resolved, even after disabling/uninstalling this extension.
+Each canonical file has its own native process/private desktop. Closing its
+Native LyX tab requests normal LyX Quit. A saved document closes without a save
+question. If there is unsaved work, its real Save/Don't Save/Cancel dialog appears
+in a temporary native tab: Save or Don't Save completes closure; Cancel restores
+the document tab and its edits. Close All resolves native decisions in sequence.
+After normal exit, only that session's owned desktop, bridge, watchers and command
+pipes are closed. The broker exits after a short idle grace when no owned session
+processes remain. Profiles and saved snapshots stay on disk for later reopening.
+
+Switching tabs and moving editor groups do not close native sessions. Code reload
+and connection loss preserve live native buffers. **Native LyX: Retained Sessions**
+lists sessions left by reload, older versions or unexpected disconnects. Save/close
+work in LyX before **Native LyX: End Session**, whose confirmation explicitly
+permits discarding remaining buffers. Window/app shutdown or uninstall does not
+guarantee native save decisions; resolve documents before exiting VS Code.
 
 **Reopen Editor With… → Text Editor** requests normal native LyX Quit for that
 file's private session. If LyX asks about unsaved work, its real dialog appears
 in a temporary native tab: choose Save, Don't Save or Cancel there. Save/Don't
 Save completes the switch and stops that session's private desktop/bridge;
 Cancel returns to Native LyX with the buffer intact. Choosing **Native LyX**
-again starts the installed application for the same file. Ordinary tab closure
-and Code reload still preserve sessions. Other managed files and ordinary
-desktop LyX instances are not closed.
+again starts the installed application for the same file. Other managed files
+and ordinary desktop LyX instances are not closed. A timeout or error preserves
+native work and restores the editor for inspection instead of force-quitting it.
 
 After a PC shutdown or native LyX exit, click the file again to restart LyX with
 its existing profile. No separate extension recovery command is required. LyX

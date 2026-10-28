@@ -18,13 +18,14 @@ executables; setting values are not shell commands.
 | width / height | Initial virtual desktop 1200 × 800; viewer resizes dynamically |
 | dpi | Initial desktop DPI, 96 |
 | autosaveSeconds | Native LyX autosave interval, 30 seconds |
-| maxSessions | 4 retained native sessions; ending requires an explicit decision |
+| maxSessions | 4 concurrent native sessions; completed tab closure releases its slot |
 | startupTimeoutMs | 60000; increase for slow first-run LyX configuration |
 | clipboardSync | true; bridge plain text only while the editor is active |
 
 Executable/display/limit settings apply when starting a new broker. Existing
 brokers retain their original configuration to avoid disrupting work. Save and
-resolve all sessions, shut down the empty broker, then reopen after changes.
+resolve all sessions; after completed closes the idle broker exits automatically.
+Reopen after it exits to apply new startup settings.
 The autosave setting initializes new native profiles; an existing profile keeps
 its native preferences. Clipboard setting changes require reopening the tab.
 

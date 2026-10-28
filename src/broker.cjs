@@ -10,7 +10,7 @@ const { CONFIG: PROTOCOL, privateDirectory, pathsFor, atomicJson, canonicalFile,
 const { nativeCommand, closeChannel } = require('./native-ipc.cjs');
 
 const CONFIG = { bodyLimit: 32768, maxSnapshotBytes: 64 * 1024 * 1024, displayFirst: 120, displayLast: 219,
-  quitTimeoutMs: 30 * 60 * 1000 };
+  quitTimeoutMs: 30 * 60 * 1000, idleShutdownMs: 2000 };
 
 async function serve(options) {
   const locations = pathsFor(options.storageRoot);
@@ -32,6 +32,9 @@ async function serve(options) {
   const watchers = new Map();
   const quitting = new Map();
   let server;
+  let idleTimer;
+  let requests = 0;
+  let shuttingDown = false;
   let startupQueue = Promise.resolve();
   try {
     if (fs.existsSync(locations.registry)) {
@@ -189,8 +192,34 @@ async function serve(options) {
     while (session.processes.some(isOwned) && Date.now() < deadline) await delay(100);
     persist();
     if (session.processes.some(isOwned)) throw new Error('A retained process has not exited. Its ownership records were kept; inspect session logs before retrying.');
+    watchers.get(session.id)?.close();
+    watchers.delete(session.id);
     closeChannel(session.pipe);
     if (!preserveProfile) throw new Error('Profiles are never automatically deleted.');
+  }
+
+  function idle() {
+    return !pending.size && ![...quitting.values()].some(item => ['waiting', 'closing'].includes(item.status)) &&
+      ![...sessions.values()].some(item => item.processes.some(isOwned));
+  }
+  function shutdown() {
+    shuttingDown = true;
+    clearTimeout(idleTimer);
+    for (const watcher of watchers.values()) watcher.close();
+    watchers.clear();
+    server.close(() => {
+      const owner = JSON.parse(fs.readFileSync(locations.lock, 'utf8'));
+      if (owner.pid === process.pid && isOwned(owner)) fs.unlinkSync(locations.lock);
+      process.exit(0);
+    });
+  }
+  function scheduleIdleShutdown() {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      if (!idle() || shuttingDown) return;
+      if (requests) { scheduleIdleShutdown(); return; }
+      shutdown();
+    }, CONFIG.idleShutdownMs);
   }
 
   function quitSession(session) {
@@ -218,6 +247,7 @@ async function serve(options) {
         // The native application has already exited by its own decision.
         await stopSession(session, true);
         result.status = 'closed';
+        scheduleIdleShutdown();
       } catch (error) {
         result.status = 'error';
         result.error = error.message;
@@ -358,8 +388,14 @@ async function serve(options) {
   }
 
   async function handle(route, body) {
+    if (shuttingDown) {
+      const error = new Error('The idle native broker is shutting down. Reopen the document in a moment.');
+      error.code = 'BROKER_STOPPING';
+      throw error;
+    }
     if (route === '/health') return { protocol: PROTOCOL.protocol, ...identity(process.pid), engine: __dirname,
-      capabilities: ['graceful-quit'], pending: pending.size + [...quitting.values()].filter(item => ['waiting', 'closing'].includes(item.status)).length };
+      capabilities: ['graceful-quit', 'tab-close'], watchers: watchers.size,
+      pending: pending.size + [...quitting.values()].filter(item => ['waiting', 'closing'].includes(item.status)).length };
     if (route === '/sessions') return [...sessions.values()].map(session => { reconcileExit(session); return publicSession(session); });
     const session = [...sessions.values()].find(item => item.id === body.id);
     if (route === '/quit' || route === '/quit-state') {
@@ -397,10 +433,8 @@ async function serve(options) {
     if (route === '/shutdown') {
       if (pending.size) throw new Error('Wait for pending session openings before shutting down the broker.');
       if ([...sessions.values()].some(item => item.processes.some(isOwned))) throw new Error('Resolve retained sessions explicitly before shutting down the broker.');
-      setTimeout(() => server.close(() => {
-        if (isOwned(JSON.parse(fs.readFileSync(locations.lock, 'utf8')))) fs.unlinkSync(locations.lock);
-        process.exit(0);
-      }), 50);
+      shuttingDown = true;
+      setTimeout(shutdown, 50);
       return { stopping: true };
     }
     if (!['/open', '/attach'].includes(route)) throw new Error('Unknown native runtime operation.');
@@ -423,6 +457,7 @@ async function serve(options) {
   persist();
   if (fs.existsSync(locations.socket)) fs.unlinkSync(locations.socket);
   server = http.createServer(async (req, res) => {
+    requests++;
     try {
       if (req.method !== 'POST') throw new Error('Only local POST requests are accepted.');
       let text = '';
@@ -436,7 +471,7 @@ async function serve(options) {
     } catch (error) {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: error.message, code: error.code }));
-    }
+    } finally { requests--; }
   });
   await new Promise((resolve, reject) => {
     server.once('error', reject);

@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.1.2 — Unreleased Linux preview
+## 0.1.3 — Unreleased Linux preview
+
+- Closing a Native LyX tab requests normal native Quit with Save/Don't Save/Cancel.
+  Cancel restores the document; completed closure stops only its owned session.
+- Serialize Close All decisions while preserving tab switching/group moves.
+- Release session watchers and command pipes after cleanup; stop an idle broker
+  after the final managed session closes. Reopening starts the same file again.
+- Keep reload/disconnect retention and the existing Text Editor quit flow.
+
+## 0.1.2 — Linux preview
 
 - Opening a document after shutdown or a native LyX exit automatically restarts
   its preserved profile. Native autosave/emergency dialogs remain in LyX.

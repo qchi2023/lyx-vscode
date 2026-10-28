@@ -10,14 +10,22 @@ experience cannot be identical to an ordinary desktop window.
   Workbench shortcuts can take precedence depending on personal keybindings.
   LyX menus are the fallback. VS Code Save All, autosave and undo history do not
   control native buffers; no VS Code dirty dot or close prompt is promised.
-- Closing a VS Code tab or reloading Code disconnects only the viewer. Native
-  sessions remain live, including unsaved edits, and consume memory until you
-  close native LyX or explicitly end them. Reopen the same file to reattach.
+- Closing a Native LyX tab requests normal native Quit. Save/Don't Save/Cancel
+  appears in a temporary native tab when needed; Cancel restores the document.
+  Completed closure stops that session's owned processes, watchers and pipes.
+  The empty broker exits after a short idle grace. Moving/switching tabs keeps
+  sessions alive. Code reload, connection loss, app/window shutdown and uninstall
+  can retain sessions; resolve native work before exiting VS Code. An unanswered
+  native dialog or failed quit preserves work rather than forcing termination.
 - Explicitly switching to **Text Editor** instead requests native Quit. An
   unsaved-work dialog is shown in a temporary native tab; Cancel restores Native
   LyX. Save/Don't Save completes the switch and closes its owned desktop/bridge.
   Resolve every native buffer opened in that session; a native comparison or
   Save As can leave additional buffers open. A timeout/error preserves them.
+- Sessions are shared by canonical filename within the same storage root. If
+  the same file is open in separate VS Code windows, closing it in one window
+  closes the shared native session. A different workspace file has its own
+  private process and is not closed. Cross-window close races need further testing.
 - Native dialogs, menus and toolbars remain within the private desktop. Files
   chosen in a dialog are local-machine files. Large dialogs may require a larger
   editor group; browser zoom and native LyX document zoom are different controls.
